@@ -34,3 +34,32 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -v
+
+  docker:
+    name: API (Docker image)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build image
+        run: docker build -t cloudops-api:ci services/api
+
+      - name: Smoke test
+        run: |
+          docker run -d --name cloudops-api -p 8000:8000 cloudops-api:ci
+          for i in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:8000/health; then
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API did not become healthy in time"
+          docker logs cloudops-api
+          exit 1
+
+      - name: Show container logs
+        if: always()
+        run: docker logs cloudops-api || true
