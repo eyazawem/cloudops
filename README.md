@@ -13,6 +13,7 @@ Under construction.
 Implemented:
 - FastAPI skeleton with a `/health` endpoint
 - Job endpoints: create, list, get and cancel (in-memory storage, to be replaced by PostgreSQL)
+- Docker image for the API, built and smoke-tested in CI
 - Automated tests (pytest) and linting (ruff)
 - GitHub Actions CI on pull requests and pushes to `main`
 
@@ -36,3 +37,9 @@ Health check:
     cd services/api
     python -m pytest -v
     ruff check .
+
+## Run with Docker
+
+    docker build -t cloudops-api:dev services/api
+    docker run --rm -p 8000:8000 cloudops-api:dev
+    curl http://127.0.0.1:8000/health
