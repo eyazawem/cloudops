@@ -12,6 +12,7 @@ Under construction.
 
 Implemented:
 - FastAPI skeleton with a `/health` endpoint
+- Job endpoints: create, list, get and cancel (in-memory storage, to be replaced by PostgreSQL)
 - Automated tests (pytest) and linting (ruff)
 - GitHub Actions CI on pull requests and pushes to `main`
 
