@@ -14,6 +14,7 @@ Implemented:
 - FastAPI skeleton with a `/health` endpoint
 - Job endpoints: create, list, get and cancel (in-memory storage, to be replaced by PostgreSQL)
 - Docker image for the API, built and smoke-tested in CI
+- Docker Compose setup for a local PostgreSQL (not yet used by the API)
 - Automated tests (pytest) and linting (ruff)
 - GitHub Actions CI on pull requests and pushes to `main`
 
@@ -43,3 +44,10 @@ Health check:
     docker build -t cloudops-api:dev services/api
     docker run --rm -p 8000:8000 cloudops-api:dev
     curl http://127.0.0.1:8000/health
+
+## Local database (PostgreSQL)
+
+    cp .env.example .env    # then replace the password in .env
+    docker compose up -d --wait
+    docker compose down     # stops it, data is kept in a Docker volume
+
