@@ -1,5 +1,6 @@
 x-api-environment: &api-environment
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cloudops}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-cloudops}
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-cloudops}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/%2F
 
 services:
   db:
@@ -18,6 +19,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-cloudops}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   migrate:
     build: ./services/api
@@ -38,8 +57,27 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: ./services/api
+    image: cloudops-api:local
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    environment: *api-environment
+    healthcheck:
+      disable: true
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
 
 volumes:
   postgres_data:
+  rabbitmq_data:
