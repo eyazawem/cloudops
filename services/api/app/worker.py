@@ -11,13 +11,31 @@ from app import messaging
 from app.db import get_engine
 from app.repository import JobRepository
 from app.schemas import JobStatus
-from app.tasks import HANDLERS, TaskError
+from app.tasks import HANDLERS, PermanentTaskError
 
 logger = logging.getLogger("worker")
+
+MAX_ATTEMPTS = 3
 
 
 class SupportsAck(Protocol):
     def basic_ack(self, delivery_tag: int) -> None: ...
+
+
+class Dispatcher(Protocol):
+    def retry(self, job_id: UUID) -> None: ...
+
+    def dead_letter(self, job_id: UUID, error: str, attempts: int) -> None: ...
+
+
+class RabbitDispatcher:
+    """Sends retry and dead-letter messages through RabbitMQ."""
+
+    def retry(self, job_id: UUID) -> None:
+        messaging.publish_retry(job_id)
+
+    def dead_letter(self, job_id: UUID, error: str, attempts: int) -> None:
+        messaging.publish_dead_letter(job_id, error, attempts)
 
 
 class Shutdown:
@@ -30,33 +48,77 @@ class Shutdown:
         self.requested = True
 
 
-def process_job(job_id: UUID, session: Session) -> None:
-    """Run one job. A job that is not pending (e.g. cancelled) is skipped."""
+def process_job(
+    job_id: UUID,
+    session: Session,
+    dispatcher: Dispatcher,
+    max_attempts: int = MAX_ATTEMPTS,
+) -> None:
+    """Run one attempt of a job.
+
+    A job that is not pending (e.g. cancelled) is skipped. A failed attempt is
+    retried until `max_attempts`; after that, or on a permanent failure, the job
+    is marked failed and reported to the dead-letter queue.
+    """
     repo = JobRepository(session)
     job = repo.get(job_id)
     if job is None:
         logger.warning("job %s not found, dropping message", job_id)
         return
-    if not repo.transition(job_id, JobStatus.PENDING, JobStatus.RUNNING):
+    attempt = repo.claim(job_id)
+    if attempt is None:
         logger.info("job %s is not pending (%s), skipping", job_id, job.status)
         return
 
-    logger.info("job %s running (task=%s)", job_id, job.task)
+    logger.info(
+        "job %s running (task=%s, attempt %d/%d)",
+        job_id,
+        job.task,
+        attempt,
+        max_attempts,
+    )
     try:
         handler = HANDLERS.get(job.task)
         if handler is None:
-            raise TaskError(f"unknown task: {job.task}")
-        handler(job.payload)
-    except Exception:
-        logger.exception("job %s failed", job_id)
-        repo.transition(job_id, JobStatus.RUNNING, JobStatus.FAILED)
+            raise PermanentTaskError(f"unknown task: {job.task}")
+        handler(job.payload, attempt)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        if not isinstance(exc, PermanentTaskError) and attempt < max_attempts:
+            logger.warning(
+                "job %s failed (attempt %d/%d), retry in %d s: %s",
+                job_id,
+                attempt,
+                max_attempts,
+                messaging.RETRY_DELAY_MS // 1000,
+                error,
+            )
+            if repo.transition(
+                job_id, JobStatus.RUNNING, JobStatus.PENDING, last_error=error
+            ):
+                dispatcher.retry(job_id)
+            return
+        logger.exception(
+            "job %s failed for good (attempt %d/%d): %s",
+            job_id,
+            attempt,
+            max_attempts,
+            error,
+        )
+        repo.transition(job_id, JobStatus.RUNNING, JobStatus.FAILED, last_error=error)
+        dispatcher.dead_letter(job_id, error, attempt)
         return
 
     repo.transition(job_id, JobStatus.RUNNING, JobStatus.SUCCEEDED)
     logger.info("job %s succeeded", job_id)
 
 
-def handle_message(channel: SupportsAck, delivery_tag: int, body: bytes) -> None:
+def handle_message(
+    channel: SupportsAck,
+    delivery_tag: int,
+    body: bytes,
+    dispatcher: Dispatcher,
+) -> None:
     """Process one message, then acknowledge it."""
     try:
         job_id = UUID(json.loads(body)["job_id"])
@@ -66,7 +128,7 @@ def handle_message(channel: SupportsAck, delivery_tag: int, body: bytes) -> None
         return
 
     with Session(get_engine()) as session:
-        process_job(job_id, session)
+        process_job(job_id, session, dispatcher)
     channel.basic_ack(delivery_tag=delivery_tag)
 
 
@@ -80,11 +142,12 @@ def main() -> None:
     shutdown = Shutdown()
     signal.signal(signal.SIGTERM, shutdown.request)
     signal.signal(signal.SIGINT, shutdown.request)
+    dispatcher = RabbitDispatcher()
 
     connection = messaging.connect()
     try:
         channel = connection.channel()
-        messaging.declare_queue(channel)
+        messaging.declare_queues(channel)
         channel.basic_qos(prefetch_count=1)
         logger.info("worker started, waiting for jobs")
 
@@ -98,7 +161,7 @@ def main() -> None:
             if shutdown.requested:
                 channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
                 break
-            handle_message(channel, method.delivery_tag, body)
+            handle_message(channel, method.delivery_tag, body, dispatcher)
             if shutdown.requested:
                 break
 

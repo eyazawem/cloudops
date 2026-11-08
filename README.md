@@ -19,6 +19,12 @@ Job lifecycle: `pending -> running -> succeeded | failed`. A pending job can
 be cancelled through the API (`cancelled`). If the queue is unavailable when a
 job is submitted, the job is marked `failed` and the API answers `503`.
 
+When a task fails, the job goes back to `pending` and is retried after 5 s
+(queue `jobs.retry`: message TTL, then dead-lettered back to `jobs`), up to 3
+attempts in total. After the last attempt, or on a permanent failure (unknown
+task), the job is `failed` and a message is published to the dead-letter
+queue `jobs.dead`. The API exposes `attempts` and `last_error`.
+
 Every status change is an atomic `UPDATE ... WHERE status = <expected>`, so a
 cancelled job is never executed and a job is never started twice.
 
@@ -33,6 +39,7 @@ Implemented:
 - FastAPI application with a `/health` endpoint
 - Job endpoints: create, list, get and cancel, persisted in PostgreSQL
 - Asynchronous processing: the API publishes each job to a durable RabbitMQ queue, a worker executes it and updates its status
+- Retries with a fixed delay and a dead-letter queue (3 attempts, then `jobs.dead`)
 - Graceful worker shutdown: on SIGTERM the worker finishes its current job, then stops
 - Database schema managed with Alembic migrations
 - Automated tests (pytest) against a real PostgreSQL database, and linting (ruff)
@@ -40,15 +47,18 @@ Implemented:
 - Docker Compose stack: PostgreSQL, RabbitMQ, one-shot migration job, API and worker
 - GitHub Actions CI on pull requests and pushes to `main`
 
-Planned: retries and dead-letter queue, Kubernetes, Helm, Prometheus, Grafana,
+Planned: Kubernetes, Helm, Prometheus, Grafana,
 an admin CLI.
 
 ## Known limitations
 
 - Tasks are simulated: `report-generation` waits for `payload.seconds`
-  (default 2, capped at 30) and `fail` always fails.
-- No automatic retry. If a worker crashes while running a job, the job stays
-  `running`.
+  (default 2, capped at 30), `fail` always fails and `flaky` fails
+  `payload.fail_times` times (default 1) before succeeding.
+- The retry delay is fixed (5 s, set by the queue arguments): no exponential
+  backoff. Nothing consumes `jobs.dead` yet: messages are kept for inspection.
+- If a worker is killed while running a job, the job stays `running`
+  (no timeout or recovery yet).
 - The job is saved first, then published: a crash between the two leaves a
   `pending` job that is never queued.
 

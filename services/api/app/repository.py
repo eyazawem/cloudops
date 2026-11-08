@@ -1,3 +1,4 @@
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -30,18 +31,43 @@ class JobRepository:
         stmt = select(JobRecord).order_by(JobRecord.created_at)
         return [Job.model_validate(r) for r in self._session.scalars(stmt)]
 
-    def transition(self, job_id: UUID, expected: JobStatus, new: JobStatus) -> bool:
+    def transition(
+        self,
+        job_id: UUID,
+        expected: JobStatus,
+        new: JobStatus,
+        last_error: str | None = None,
+    ) -> bool:
         """Atomically move a job from `expected` to `new`.
 
         Returns False, without changing anything, if the job is not in the
         `expected` status (or does not exist).
         """
+        values: dict[str, Any] = {"status": new.value}
+        if last_error is not None:
+            values["last_error"] = last_error
         stmt = (
             update(JobRecord)
             .where(JobRecord.id == job_id)
             .where(JobRecord.status == expected.value)
-            .values(status=new.value)
+            .values(**values)
         )
         result = self._session.execute(stmt)
         self._session.commit()
         return result.rowcount == 1
+
+    def claim(self, job_id: UUID) -> int | None:
+        """Atomically move a pending job to running and count the attempt.
+
+        Returns the attempt number, or None if the job is not pending.
+        """
+        stmt = (
+            update(JobRecord)
+            .where(JobRecord.id == job_id)
+            .where(JobRecord.status == JobStatus.PENDING.value)
+            .values(status=JobStatus.RUNNING.value, attempts=JobRecord.attempts + 1)
+            .returning(JobRecord.attempts)
+        )
+        attempt = self._session.execute(stmt).scalar_one_or_none()
+        self._session.commit()
+        return attempt
