@@ -66,6 +66,7 @@ services:
     build: ./services/api
     image: cloudops-api:local
     command: ["python", "-m", "app.worker"]
+    stop_grace_period: 40s
     restart: unless-stopped
     environment: *api-environment
     healthcheck:

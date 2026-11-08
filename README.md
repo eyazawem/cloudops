@@ -33,14 +33,15 @@ Implemented:
 - FastAPI application with a `/health` endpoint
 - Job endpoints: create, list, get and cancel, persisted in PostgreSQL
 - Asynchronous processing: the API publishes each job to a durable RabbitMQ queue, a worker executes it and updates its status
+- Graceful worker shutdown: on SIGTERM the worker finishes its current job, then stops
 - Database schema managed with Alembic migrations
 - Automated tests (pytest) against a real PostgreSQL database, and linting (ruff)
 - Docker image shared by the API and the worker, built and smoke-tested in CI
 - Docker Compose stack: PostgreSQL, RabbitMQ, one-shot migration job, API and worker
 - GitHub Actions CI on pull requests and pushes to `main`
 
-Planned: retries and dead-letter queue, graceful worker shutdown, Kubernetes,
-Helm, Prometheus, Grafana, an admin CLI.
+Planned: retries and dead-letter queue, Kubernetes, Helm, Prometheus, Grafana,
+an admin CLI.
 
 ## Known limitations
 
@@ -50,7 +51,6 @@ Helm, Prometheus, Grafana, an admin CLI.
   `running`.
 - The job is saved first, then published: a crash between the two leaves a
   `pending` job that is never queued.
-- The worker does not handle SIGTERM gracefully yet.
 
 ## Run everything with Docker Compose
 

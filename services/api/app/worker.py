@@ -1,9 +1,10 @@
 import json
 import logging
+import signal
+from types import FrameType
+from typing import Protocol
 from uuid import UUID
 
-from pika.adapters.blocking_connection import BlockingChannel
-from pika.spec import Basic, BasicProperties
 from sqlalchemy.orm import Session
 
 from app import messaging
@@ -13,6 +14,20 @@ from app.schemas import JobStatus
 from app.tasks import HANDLERS, TaskError
 
 logger = logging.getLogger("worker")
+
+
+class SupportsAck(Protocol):
+    def basic_ack(self, delivery_tag: int) -> None: ...
+
+
+class Shutdown:
+    """Set by SIGTERM/SIGINT. The main loop checks it between jobs."""
+
+    def __init__(self) -> None:
+        self.requested = False
+
+    def request(self, signum: int, frame: FrameType | None) -> None:
+        self.requested = True
 
 
 def process_job(job_id: UUID, session: Session) -> None:
@@ -41,22 +56,18 @@ def process_job(job_id: UUID, session: Session) -> None:
     logger.info("job %s succeeded", job_id)
 
 
-def on_message(
-    channel: BlockingChannel,
-    method: Basic.Deliver,
-    properties: BasicProperties,
-    body: bytes,
-) -> None:
+def handle_message(channel: SupportsAck, delivery_tag: int, body: bytes) -> None:
+    """Process one message, then acknowledge it."""
     try:
         job_id = UUID(json.loads(body)["job_id"])
     except (ValueError, KeyError, TypeError):
         logger.error("malformed message, dropping: %r", body)
-        channel.basic_ack(delivery_tag=method.delivery_tag)
+        channel.basic_ack(delivery_tag=delivery_tag)
         return
 
     with Session(get_engine()) as session:
         process_job(job_id, session)
-    channel.basic_ack(delivery_tag=method.delivery_tag)
+    channel.basic_ack(delivery_tag=delivery_tag)
 
 
 def main() -> None:
@@ -65,20 +76,39 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     logging.getLogger("pika").setLevel(logging.WARNING)
+
+    shutdown = Shutdown()
+    signal.signal(signal.SIGTERM, shutdown.request)
+    signal.signal(signal.SIGINT, shutdown.request)
+
     connection = messaging.connect()
-    channel = connection.channel()
-    messaging.declare_queue(channel)
-    channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(
-        queue=messaging.QUEUE_NAME, on_message_callback=on_message
-    )
-    logger.info("worker started, waiting for jobs")
     try:
-        channel.start_consuming()
-    except KeyboardInterrupt:
-        channel.stop_consuming()
+        channel = connection.channel()
+        messaging.declare_queue(channel)
+        channel.basic_qos(prefetch_count=1)
+        logger.info("worker started, waiting for jobs")
+
+        for method, _properties, body in channel.consume(
+            messaging.QUEUE_NAME, inactivity_timeout=1.0
+        ):
+            if method is None:  # no message for 1 s: only check the flag
+                if shutdown.requested:
+                    break
+                continue
+            if shutdown.requested:
+                channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                break
+            handle_message(channel, method.delivery_tag, body)
+            if shutdown.requested:
+                break
+
+        requeued = channel.cancel()
+        logger.info(
+            "worker stopped (%d pending message(s) returned to the queue)", requeued
+        )
     finally:
-        connection.close()
+        if connection.is_open:
+            connection.close()
 
 
 if __name__ == "__main__":
