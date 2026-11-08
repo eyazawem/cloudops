@@ -62,3 +62,17 @@ def test_cancel_twice_returns_409():
 def test_cancel_unknown_job_returns_404():
     response = client.post(f"/jobs/{uuid4()}/cancel")
     assert response.status_code == 404
+
+
+def test_create_job_publishes_message(publisher):
+    job = create_job()
+    assert [str(job_id) for job_id in publisher.published] == [job["id"]]
+
+
+def test_queue_failure_returns_503_and_marks_job_failed(publisher):
+    publisher.fail = True
+    response = client.post("/jobs", json={"task": "report-generation"})
+    assert response.status_code == 503
+    jobs = client.get("/jobs").json()
+    assert len(jobs) == 1
+    assert jobs[0]["status"] == "failed"

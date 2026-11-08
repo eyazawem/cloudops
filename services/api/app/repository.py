@@ -30,13 +30,17 @@ class JobRepository:
         stmt = select(JobRecord).order_by(JobRecord.created_at)
         return [Job.model_validate(r) for r in self._session.scalars(stmt)]
 
-    def cancel_if_pending(self, job_id: UUID) -> bool:
-        """Atomically cancel a job only if it is still pending."""
+    def transition(self, job_id: UUID, expected: JobStatus, new: JobStatus) -> bool:
+        """Atomically move a job from `expected` to `new`.
+
+        Returns False, without changing anything, if the job is not in the
+        `expected` status (or does not exist).
+        """
         stmt = (
             update(JobRecord)
             .where(JobRecord.id == job_id)
-            .where(JobRecord.status == JobStatus.PENDING.value)
-            .values(status=JobStatus.CANCELLED.value)
+            .where(JobRecord.status == expected.value)
+            .values(status=new.value)
         )
         result = self._session.execute(stmt)
         self._session.commit()
