@@ -7,3 +7,5 @@ tests/
 requirements-dev.txt
 Dockerfile
 .dockerignore
+integration_tests/
+pytest.ini
