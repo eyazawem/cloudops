@@ -76,3 +76,9 @@ def test_queue_failure_returns_503_and_marks_job_failed(publisher):
     jobs = client.get("/jobs").json()
     assert len(jobs) == 1
     assert jobs[0]["status"] == "failed"
+
+
+def test_new_job_has_no_attempts_and_no_error():
+    job = create_job()
+    assert job["attempts"] == 0
+    assert job["last_error"] is None

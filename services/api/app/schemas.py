@@ -26,4 +26,6 @@ class Job(BaseModel):
     task: str
     payload: dict[str, Any]
     status: JobStatus
+    attempts: int
+    last_error: str | None
     created_at: datetime
