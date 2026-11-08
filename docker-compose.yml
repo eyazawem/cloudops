@@ -1,3 +1,6 @@
+x-api-environment: &api-environment
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cloudops}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-cloudops}
+
 services:
   db:
     image: postgres:17
@@ -15,6 +18,28 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  migrate:
+    build: ./services/api
+    image: cloudops-api:local
+    command: ["alembic", "upgrade", "head"]
+    environment: *api-environment
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: ./services/api
+    image: cloudops-api:local
+    restart: unless-stopped
+    environment: *api-environment
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   postgres_data:

@@ -16,7 +16,7 @@ Implemented:
 - Database schema managed with Alembic migrations
 - Automated tests (pytest) against a real PostgreSQL database, and linting (ruff)
 - Docker image for the API, built and smoke-tested in CI
-- Docker Compose setup for a local PostgreSQL
+- Docker Compose stack: PostgreSQL, one-shot migration job and API
 - GitHub Actions CI on pull requests and pushes to `main`
 
 Planned: RabbitMQ and workers, Kubernetes, Helm, Prometheus, Grafana.
@@ -65,5 +65,12 @@ with `_test` (they refuse to run otherwise).
     docker run --rm -p 8000:8000 cloudops-api:dev
     curl http://127.0.0.1:8000/health
 
-`/health` works without a database. The job endpoints need `DATABASE_URL`;
-running the API together with PostgreSQL in Compose is not set up yet.
+`/health` works without a database. The job endpoints need `DATABASE_URL`.
+
+Run the whole stack (PostgreSQL, migrations, API) with one command:
+
+    cp .env.example .env    # then replace the password in .env
+    docker compose up -d
+    curl http://127.0.0.1:8000/health
+    curl http://127.0.0.1:8000/jobs
+    docker compose down     # data is kept in the postgres_data volume
