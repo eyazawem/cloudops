@@ -45,11 +45,13 @@ Implemented:
 - Automated tests (pytest) against a real PostgreSQL database, and linting (ruff)
 - Docker image shared by the API and the worker, built and smoke-tested in CI
 - Docker Compose stack: PostgreSQL, RabbitMQ, one-shot migration job, API and worker
+- Kubernetes manifests for a local Kind cluster (StatefulSets, migration Job, API and
+  worker Deployments with probes and resource limits), checked by the same end-to-end tests
 - End-to-end integration tests in CI: the Compose stack is started and jobs are
   submitted through the API (success, retries, dead-letter queue, cancellation)
 - GitHub Actions CI on pull requests and pushes to `main`
 
-Planned: Kubernetes, Helm, Prometheus, Grafana,
+Planned: autoscaling, Helm, Prometheus, Grafana,
 an admin CLI.
 
 ## Known limitations
@@ -63,6 +65,9 @@ an admin CLI.
   (no timeout or recovery yet).
 - The job is saved first, then published: a crash between the two leaves a
   `pending` job that is never queued.
+- Kubernetes: the databases are single replicas, the worker has no probe and
+  there is no autoscaling yet. Kind announces that hosts using cgroup v1 will
+  not be supported in a future release.
 
 ## Run everything with Docker Compose
 
@@ -121,3 +126,23 @@ They run against the real Compose stack and are not part of the default run:
     source ../../scripts/dev-env.sh
     python -m pytest integration_tests -v
     docker compose down
+
+## Kubernetes (Kind)
+
+The same application runs on a local Kind cluster (manifests in `deploy/k8s`):
+PostgreSQL and RabbitMQ (StatefulSets with persistent volumes), a migration Job,
+the API (2 replicas, rolling updates, probes) and the worker (graceful shutdown).
+All containers have resource requests and limits, and the application containers
+run as non-root.
+
+Prerequisites: Docker, `kind` v0.33.0 and `kubectl` 1.34. Kubernetes 1.35 and newer
+refuse to start on hosts using cgroup v1, so the cluster uses a pinned 1.34 node
+image (see `scripts/kind-create.sh`).
+
+    bash scripts/kind-create.sh
+    bash scripts/k8s-deploy.sh    # builds the image, loads it into Kind, deploys
+    bash scripts/k8s-e2e.sh       # integration tests through kubectl port-forward
+    kind delete cluster --name cloudops
+
+Secrets are created from the git-ignored `.env` file by `scripts/k8s-secrets.sh`:
+nothing sensitive is committed.
