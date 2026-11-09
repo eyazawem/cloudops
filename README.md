@@ -45,6 +45,8 @@ Implemented:
 - Automated tests (pytest) against a real PostgreSQL database, and linting (ruff)
 - Docker image shared by the API and the worker, built and smoke-tested in CI
 - Docker Compose stack: PostgreSQL, RabbitMQ, one-shot migration job, API and worker
+- End-to-end integration tests in CI: the Compose stack is started and jobs are
+  submitted through the API (success, retries, dead-letter queue, cancellation)
 - GitHub Actions CI on pull requests and pushes to `main`
 
 Planned: Kubernetes, Helm, Prometheus, Grafana,
@@ -109,3 +111,13 @@ publisher in the API tests.
     source ../../scripts/dev-env.sh
     python -m pytest -v
     ruff check .
+
+## Integration tests
+
+They run against the real Compose stack and are not part of the default run:
+
+    docker compose up -d --build
+    cd services/api
+    source ../../scripts/dev-env.sh
+    python -m pytest integration_tests -v
+    docker compose down
