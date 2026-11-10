@@ -146,3 +146,21 @@ image (see `scripts/kind-create.sh`).
 
 Secrets are created from the git-ignored `.env` file by `scripts/k8s-secrets.sh`:
 nothing sensitive is committed.
+
+Two scripts measure the behaviour of the cluster:
+
+- `scripts/k8s-rollout-test.sh` sends requests to the API through its Service while
+  a rolling update runs and counts the failed requests. The API containers have a
+  5 s `preStop` hook so that the Service has time to stop routing to a pod before
+  it stops accepting connections.
+- `scripts/k8s-scale-demo.sh` compares the time needed to process 12 jobs with 1
+  worker and with 3 workers (the workers are competing consumers of one queue).
+
+Measurements on a single-node Kind cluster (small samples, not guarantees):
+
+| Scenario | Result |
+|---|---|
+| Rolling update of the API, no `preStop` | 3 failed requests out of 1110 |
+| Rolling update of the API, with `preStop` | 0 failed out of 1150, and 0 out of 1151 (two runs) |
+| 12 jobs of 3 s, 1 worker | 36.5 s |
+| 12 jobs of 3 s, 3 workers | 12.6 s (4 jobs per worker) |
