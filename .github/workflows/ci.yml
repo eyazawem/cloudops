@@ -125,3 +125,58 @@ jobs:
       - name: Stop the stack
         if: always()
         run: docker compose down -v
+
+  kubernetes:
+    name: Kubernetes (Kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # The cluster pulls the public images itself on the runner.
+      LOAD_PUBLIC_IMAGES: "false"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/api/requirements*.txt
+
+      - name: Install test dependencies
+        run: pip install -r services/api/requirements-dev.txt
+
+      - name: Install kubectl and kind
+        run: |
+          bash scripts/install-k8s-tools.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Create the .env file (throwaway credentials)
+        run: |
+          printf '%s\n' \
+            "POSTGRES_USER=cloudops" \
+            "POSTGRES_PASSWORD=ci-postgres-password" \
+            "POSTGRES_DB=cloudops" \
+            "RABBITMQ_USER=cloudops" \
+            "RABBITMQ_PASSWORD=ci-rabbitmq-password" > .env
+
+      - name: Create the Kind cluster
+        run: bash scripts/kind-create.sh
+
+      - name: Deploy the application
+        run: bash scripts/k8s-deploy.sh
+
+      - name: Run the integration tests against the cluster
+        run: bash scripts/k8s-e2e.sh
+
+      - name: Show cluster state and logs
+        if: failure()
+        run: |
+          kubectl get pods,svc,pvc -A || true
+          kubectl -n cloudops get events --sort-by=.lastTimestamp || true
+          kubectl -n cloudops describe pods || true
+          for app in api worker migrate postgres rabbitmq; do
+            echo "===== logs: $app ====="
+            kubectl -n cloudops logs -l "app=$app" --all-containers=true --prefix --tail=100 || true
+          done

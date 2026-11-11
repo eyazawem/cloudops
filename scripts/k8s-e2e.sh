@@ -15,7 +15,7 @@ kubectl --context "$ctx" -n cloudops port-forward pod/rabbitmq-0 15672:15672 > /
 pf_mq=$!
 trap 'kill "$pf_api" "$pf_mq" 2>/dev/null || true' EXIT
 
-if [ -z "${VIRTUAL_ENV:-}" ]; then
+if [ -z "${VIRTUAL_ENV:-}" ] && [ -f "${root}/services/api/.venv/bin/activate" ]; then
   source "${root}/services/api/.venv/bin/activate"
 fi
 source "${root}/scripts/dev-env.sh"
