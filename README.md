@@ -47,6 +47,8 @@ Implemented:
 - Docker Compose stack: PostgreSQL, RabbitMQ, one-shot migration job, API and worker
 - Kubernetes manifests for a local Kind cluster (StatefulSets, migration Job, API and
   worker Deployments with probes and resource limits), checked by the same end-to-end tests
+- Kubernetes end-to-end test in CI: a Kind cluster is created on the runner, the
+  manifests are deployed and the integration tests run through `kubectl port-forward`
 - End-to-end integration tests in CI: the Compose stack is started and jobs are
   submitted through the API (success, retries, dead-letter queue, cancellation)
 - GitHub Actions CI on pull requests and pushes to `main`
@@ -139,6 +141,7 @@ Prerequisites: Docker, `kind` v0.33.0 and `kubectl` 1.34. Kubernetes 1.35 and ne
 refuse to start on hosts using cgroup v1, so the cluster uses a pinned 1.34 node
 image (see `scripts/kind-create.sh`).
 
+    bash scripts/install-k8s-tools.sh   # kubectl 1.34 and kind v0.33.0, with checksums
     bash scripts/kind-create.sh
     bash scripts/k8s-deploy.sh    # builds the image, loads it into Kind, deploys
     bash scripts/k8s-e2e.sh       # integration tests through kubectl port-forward

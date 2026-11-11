@@ -10,7 +10,15 @@ if [ "$(kubectl config current-context)" != "kind-cloudops" ]; then
 fi
 
 docker build -t cloudops-api:local services/api
-kind load docker-image postgres:17 rabbitmq:4-management cloudops-api:local --name cloudops
+# Public images are loaded from the local Docker cache to avoid downloading them
+# again inside the cluster. CI sets LOAD_PUBLIC_IMAGES=false: the cluster pulls them.
+if [ "${LOAD_PUBLIC_IMAGES:-true}" = "true" ]; then
+  for image in postgres:17 rabbitmq:4-management; do
+    docker image inspect "$image" > /dev/null 2>&1 || docker pull "$image"
+  done
+  kind load docker-image postgres:17 rabbitmq:4-management --name cloudops
+fi
+kind load docker-image cloudops-api:local --name cloudops
 
 kubectl apply -f deploy/k8s/00-namespace.yaml
 bash scripts/k8s-secrets.sh
