@@ -49,11 +49,12 @@ Implemented:
   worker Deployments with probes and resource limits), checked by the same end-to-end tests
 - Kubernetes end-to-end test in CI: a Kind cluster is created on the runner, the
   manifests are deployed and the integration tests run through `kubectl port-forward`
+- Horizontal Pod Autoscaler on the API (CPU, 2 to 4 replicas) fed by metrics-server
 - End-to-end integration tests in CI: the Compose stack is started and jobs are
   submitted through the API (success, retries, dead-letter queue, cancellation)
 - GitHub Actions CI on pull requests and pushes to `main`
 
-Planned: autoscaling, Helm, Prometheus, Grafana,
+Planned: Helm, Prometheus, Grafana,
 an admin CLI.
 
 ## Known limitations
@@ -68,7 +69,7 @@ an admin CLI.
 - The job is saved first, then published: a crash between the two leaves a
   `pending` job that is never queued.
 - Kubernetes: the databases are single replicas, the worker has no probe and
-  there is no autoscaling yet. Kind announces that hosts using cgroup v1 will
+  only the API is autoscaled. Kind announces that hosts using cgroup v1 will
   not be supported in a future release.
 
 ## Run everything with Docker Compose
@@ -150,7 +151,7 @@ image (see `scripts/kind-create.sh`).
 Secrets are created from the git-ignored `.env` file by `scripts/k8s-secrets.sh`:
 nothing sensitive is committed.
 
-Two scripts measure the behaviour of the cluster:
+Three scripts measure the behaviour of the cluster:
 
 - `scripts/k8s-rollout-test.sh` sends requests to the API through its Service while
   a rolling update runs and counts the failed requests. The API containers have a
@@ -158,6 +159,12 @@ Two scripts measure the behaviour of the cluster:
   it stops accepting connections.
 - `scripts/k8s-scale-demo.sh` compares the time needed to process 12 jobs with 1
   worker and with 3 workers (the workers are competing consumers of one queue).
+- `scripts/k8s-hpa-demo.sh` installs metrics-server (v0.9.1, with
+  `--kubelet-insecure-tls`, for a local Kind cluster only), creates the HPA of the
+  API and generates load from inside the cluster while printing the autoscaler's
+  decisions. The HPA target is 50 % of the CPU *request* (50m) of each pod. On a
+  slow connection the installation can take several minutes, because the image is
+  pulled by two pods created one after the other (the manifest, then its patch).
 
 Measurements on a single-node Kind cluster (small samples, not guarantees):
 
@@ -167,3 +174,5 @@ Measurements on a single-node Kind cluster (small samples, not guarantees):
 | Rolling update of the API, with `preStop` | 0 failed out of 1150, and 0 out of 1151 (two runs) |
 | 12 jobs of 3 s, 1 worker | 36.5 s |
 | 12 jobs of 3 s, 3 workers | 12.6 s (4 jobs per worker) |
+| API under load (about 2,400 requests/s for 150 s) | 2 to 4 replicas within about 30 s, 0 failed out of 361,259 requests |
+| After the load stops | back to 2 replicas after about 2 minutes (60 s stabilization window) |
