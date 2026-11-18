@@ -180,3 +180,39 @@ jobs:
             echo "===== logs: $app ====="
             kubectl -n cloudops logs -l "app=$app" --all-containers=true --prefix --tail=100 || true
           done
+
+  security:
+    name: Security (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Trivy (pinned, checksum verified)
+        run: |
+          bash scripts/install-trivy.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Scan Kubernetes manifests and Dockerfile (blocking)
+        run: |
+          trivy config --ignorefile .trivyignore.yaml --severity HIGH,CRITICAL --exit-code 1 deploy/k8s
+          trivy config --ignorefile .trivyignore.yaml --severity HIGH,CRITICAL --exit-code 1 services/api
+
+      - name: Scan for secrets (blocking)
+        run: trivy fs --scanners secret --exit-code 1 .
+
+      - name: Build the image
+        run: docker build -t cloudops-api:ci services/api
+
+      - name: Scan dependencies and image for vulnerabilities (report only)
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy"
+          trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --skip-java-db-update \
+            --format json --output "$RUNNER_TEMP/trivy/fs.json" services/api
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed --skip-java-db-update \
+            --format json --output "$RUNNER_TEMP/trivy/image.json" cloudops-api:ci
+          echo "===== dependencies (services/api) ====="
+          python3 scripts/trivy-summary.py "$RUNNER_TEMP/trivy/fs.json"
+          echo "===== image ====="
+          python3 scripts/trivy-summary.py "$RUNNER_TEMP/trivy/image.json"

@@ -50,6 +50,9 @@ Implemented:
 - Kubernetes end-to-end test in CI: a Kind cluster is created on the runner, the
   manifests are deployed and the integration tests run through `kubectl port-forward`
 - Horizontal Pod Autoscaler on the API (CPU, 2 to 4 replicas) fed by metrics-server
+- Security scans in CI with a pinned, checksum-verified Trivy binary: Kubernetes
+  manifests, Dockerfile and secrets block the build; image and dependency
+  vulnerabilities are reported (not blocking yet)
 - End-to-end integration tests in CI: the Compose stack is started and jobs are
   submitted through the API (success, retries, dead-letter queue, cancellation)
 - GitHub Actions CI on pull requests and pushes to `main`
@@ -71,6 +74,10 @@ an admin CLI.
 - Kubernetes: the databases are single replicas, the worker has no probe and
   only the API is autoscaled. Kind announces that hosts using cgroup v1 will
   not be supported in a future release.
+- The worker does not reconnect to RabbitMQ: when the broker restarts it exits
+  (`CONNECTION_FORCED`) and Kubernetes restarts it, with a growing delay.
+- RabbitMQ keeps a writable root filesystem: documented exception in
+  `.trivyignore.yaml` (its image generates configuration at startup).
 
 ## Run everything with Docker Compose
 
@@ -135,8 +142,9 @@ They run against the real Compose stack and are not part of the default run:
 The same application runs on a local Kind cluster (manifests in `deploy/k8s`):
 PostgreSQL and RabbitMQ (StatefulSets with persistent volumes), a migration Job,
 the API (2 replicas, rolling updates, probes) and the worker (graceful shutdown).
-All containers have resource requests and limits, and the application containers
-run as non-root.
+All containers have resource requests and limits and run as non-root with
+privilege escalation disabled and all capabilities dropped. The API, the worker,
+the migration Job and PostgreSQL also use a read-only root filesystem.
 
 Prerequisites: Docker, `kind` v0.33.0 and `kubectl` 1.34. Kubernetes 1.35 and newer
 refuse to start on hosts using cgroup v1, so the cluster uses a pinned 1.34 node
