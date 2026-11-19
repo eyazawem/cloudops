@@ -1,0 +1,10 @@
+# Documented exceptions for Trivy. Each one names a rule, a file and the reason.
+misconfigurations:
+  - id: KSV-0014
+    paths:
+      - "**/20-rabbitmq.yaml"
+    statement: >-
+      The official RabbitMQ image generates configuration files at startup, so a read-only
+      root filesystem would need extra writable volumes that have not been validated yet.
+      The container runs as non-root (uid 999) with no privilege escalation and all
+      capabilities dropped.
