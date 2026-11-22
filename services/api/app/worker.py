@@ -1,10 +1,13 @@
 import json
 import logging
 import signal
+import time
+from collections.abc import Callable
 from types import FrameType
 from typing import Protocol
 from uuid import UUID
 
+from pika.exceptions import AMQPError
 from sqlalchemy.orm import Session
 
 from app import messaging
@@ -16,6 +19,8 @@ from app.tasks import HANDLERS, PermanentTaskError
 logger = logging.getLogger("worker")
 
 MAX_ATTEMPTS = 3
+RECONNECT_MIN_SECONDS = 1.0
+RECONNECT_MAX_SECONDS = 30.0
 
 
 class SupportsAck(Protocol):
@@ -46,6 +51,23 @@ class Shutdown:
 
     def request(self, signum: int, frame: FrameType | None) -> None:
         self.requested = True
+
+
+class Backoff:
+    """Delay that doubles after each failure, up to a maximum."""
+
+    def __init__(self, minimum: float, maximum: float) -> None:
+        self.minimum = minimum
+        self.maximum = maximum
+        self.delay = minimum
+
+    def next(self) -> float:
+        current = self.delay
+        self.delay = min(self.delay * 2, self.maximum)
+        return current
+
+    def reset(self) -> None:
+        self.delay = self.minimum
 
 
 def process_job(
@@ -132,23 +154,28 @@ def handle_message(
     channel.basic_ack(delivery_tag=delivery_tag)
 
 
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    logging.getLogger("pika").setLevel(logging.WARNING)
+def sleep_unless_shutdown(
+    shutdown: Shutdown,
+    seconds: float,
+    sleep: Callable[[float], None] = time.sleep,
+    step: float = 0.5,
+) -> None:
+    """Sleep for `seconds`, in short steps so that a shutdown request is noticed."""
+    remaining = seconds
+    while remaining > 0 and not shutdown.requested:
+        pause = min(step, remaining)
+        sleep(pause)
+        remaining -= pause
 
-    shutdown = Shutdown()
-    signal.signal(signal.SIGTERM, shutdown.request)
-    signal.signal(signal.SIGINT, shutdown.request)
-    dispatcher = RabbitDispatcher()
 
+def serve(shutdown: Shutdown, dispatcher: Dispatcher, backoff: Backoff) -> None:
+    """Consume jobs until a shutdown is requested. Raises if the connection is lost."""
     connection = messaging.connect()
     try:
         channel = connection.channel()
         messaging.declare_queues(channel)
         channel.basic_qos(prefetch_count=1)
+        backoff.reset()
         logger.info("worker started, waiting for jobs")
 
         for method, _properties, body in channel.consume(
@@ -172,6 +199,47 @@ def main() -> None:
     finally:
         if connection.is_open:
             connection.close()
+
+
+def run(
+    serve_once: Callable[[Backoff], None],
+    shutdown: Shutdown,
+    backoff: Backoff,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Call `serve_once` until it returns.
+
+    When the connection to RabbitMQ is lost or unavailable, wait with a growing
+    delay and try again. Any other error is not caught: it stops the worker.
+    """
+    while not shutdown.requested:
+        try:
+            serve_once(backoff)
+            return
+        except (AMQPError, OSError) as exc:
+            delay = backoff.next()
+            logger.warning(
+                "RabbitMQ connection lost or unavailable (%s: %s), retrying in %.0f s",
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+            sleep_unless_shutdown(shutdown, delay, sleep)
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    logging.getLogger("pika").setLevel(logging.WARNING)
+
+    shutdown = Shutdown()
+    signal.signal(signal.SIGTERM, shutdown.request)
+    signal.signal(signal.SIGINT, shutdown.request)
+    dispatcher = RabbitDispatcher()
+    backoff = Backoff(RECONNECT_MIN_SECONDS, RECONNECT_MAX_SECONDS)
+    run(lambda b: serve(shutdown, dispatcher, b), shutdown, backoff)
 
 
 if __name__ == "__main__":

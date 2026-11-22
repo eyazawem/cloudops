@@ -1,12 +1,24 @@
 import json
 from uuid import UUID, uuid4
 
+import pytest
+from pika.exceptions import AMQPConnectionError
 from sqlalchemy.orm import Session
 
 from app.db import get_engine
 from app.repository import JobRepository
 from app.schemas import Job, JobCreate, JobStatus
-from app.worker import MAX_ATTEMPTS, Shutdown, handle_message, process_job
+from app.worker import (
+    MAX_ATTEMPTS,
+    Backoff,
+    Shutdown,
+    handle_message,
+    process_job,
+    sleep_unless_shutdown,
+)
+from app.worker import (
+    run as run_forever,
+)
 
 
 class FakeDispatcher:
@@ -159,3 +171,67 @@ def test_shutdown_flag_is_set_by_request():
     assert not shutdown.requested
     shutdown.request(15, None)
     assert shutdown.requested
+
+
+def test_backoff_doubles_up_to_the_maximum_and_resets():
+    backoff = Backoff(1.0, 8.0)
+    assert [backoff.next() for _ in range(5)] == [1.0, 2.0, 4.0, 8.0, 8.0]
+    backoff.reset()
+    assert backoff.next() == 1.0
+
+
+def test_sleep_unless_shutdown_sleeps_the_requested_time_in_steps():
+    slept = []
+    sleep_unless_shutdown(Shutdown(), 1.5, sleep=slept.append, step=0.5)
+    assert slept == [0.5, 0.5, 0.5]
+
+
+def test_sleep_unless_shutdown_stops_when_a_shutdown_is_requested():
+    shutdown = Shutdown()
+    slept = []
+
+    def fake_sleep(seconds):
+        slept.append(seconds)
+        shutdown.request(15, None)
+
+    sleep_unless_shutdown(shutdown, 10.0, sleep=fake_sleep)
+    assert slept == [0.5]
+
+
+def test_run_reconnects_with_a_growing_delay_then_returns():
+    attempts = []
+    slept = []
+
+    def serve_once(backoff):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise AMQPConnectionError("broker down")
+
+    run_forever(serve_once, Shutdown(), Backoff(1.0, 30.0), sleep=slept.append)
+    assert len(attempts) == 3
+    assert sum(slept) == 3.0  # 1 s after the first failure, 2 s after the second
+
+
+def test_run_stops_reconnecting_when_a_shutdown_is_requested():
+    shutdown = Shutdown()
+    calls = []
+
+    def serve_once(backoff):
+        calls.append(1)
+        raise AMQPConnectionError("broker down")
+
+    def fake_sleep(seconds):
+        shutdown.request(15, None)
+
+    run_forever(serve_once, shutdown, Backoff(1.0, 30.0), sleep=fake_sleep)
+    assert len(calls) == 1
+
+
+def test_run_does_not_hide_unexpected_errors():
+    def serve_once(backoff):
+        raise ValueError("bug")
+
+    with pytest.raises(ValueError):
+        run_forever(
+            serve_once, Shutdown(), Backoff(1.0, 30.0), sleep=lambda seconds: None
+        )

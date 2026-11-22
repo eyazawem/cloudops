@@ -41,6 +41,8 @@ Implemented:
 - Asynchronous processing: the API publishes each job to a durable RabbitMQ queue, a worker executes it and updates its status
 - Retries with a fixed delay and a dead-letter queue (3 attempts, then `jobs.dead`)
 - Graceful worker shutdown: on SIGTERM the worker finishes its current job, then stops
+- The worker reconnects to RabbitMQ by itself when the broker restarts (delay doubling
+  from 1 s to 30 s); `scripts/k8s-broker-restart-test.sh` checks it on the Kind cluster
 - Database schema managed with Alembic migrations
 - Automated tests (pytest) against a real PostgreSQL database, and linting (ruff)
 - Docker image shared by the API and the worker, built and smoke-tested in CI
@@ -74,8 +76,6 @@ an admin CLI.
 - Kubernetes: the databases are single replicas, the worker has no probe and
   only the API is autoscaled. Kind announces that hosts using cgroup v1 will
   not be supported in a future release.
-- The worker does not reconnect to RabbitMQ: when the broker restarts it exits
-  (`CONNECTION_FORCED`) and Kubernetes restarts it, with a growing delay.
 - RabbitMQ keeps a writable root filesystem: documented exception in
   `.trivyignore.yaml` (its image generates configuration at startup).
 
