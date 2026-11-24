@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write   # create the GitHub release
+  packages: write   # push the image to GitHub Container Registry
+
+jobs:
+  publish:
+    name: Publish the API image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check that the tag belongs to the history of main
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag $GITHUB_REF_NAME is not on the history of main: refusing to publish."
+            exit 1
+          fi
+
+      - name: Compute the image name and version
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "IMAGE=ghcr.io/${owner}/cloudops-api" >> "$GITHUB_ENV"
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build the image
+        run: |
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            -t "${IMAGE}:${VERSION}" services/api
+
+      - name: Smoke test
+        run: |
+          docker run -d --name api -p 8000:8000 "${IMAGE}:${VERSION}"
+          for i in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:8000/health; then
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "The API did not become healthy in time"
+          docker logs api
+          exit 1
+
+      - name: Install Trivy (pinned, checksum verified)
+        run: |
+          bash scripts/install-trivy.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Scan the image (fails on fixed CRITICAL vulnerabilities)
+        run: |
+          trivy image --severity CRITICAL --ignore-unfixed --skip-java-db-update \
+            --exit-code 1 "${IMAGE}:${VERSION}"
+
+      - name: Log in to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push the image
+        run: |
+          docker push "${IMAGE}:${VERSION}"
+          docker tag "${IMAGE}:${VERSION}" "${IMAGE}:sha-${GITHUB_SHA::7}"
+          docker push "${IMAGE}:sha-${GITHUB_SHA::7}"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:${VERSION}")"
+          {
+            echo "### Published image"
+            echo
+            echo "- ${IMAGE}:${VERSION}"
+            echo "- ${IMAGE}:sha-${GITHUB_SHA::7}"
+            echo "- digest: \`${digest}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
