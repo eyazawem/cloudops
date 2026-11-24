@@ -52,7 +52,7 @@ after="$(restart_count)"
 echo "job status: ${status}"
 echo "worker restarts after: ${after}"
 echo "== Worker log (reconnection) =="
-kubectl -n "$ns" logs deployment/worker --tail=40 | grep -E "RabbitMQ connection|worker started" || true
+kubectl -n "$ns" logs deployment/worker --tail=-1 | grep -E "RabbitMQ connection|worker started" || true
 
 if [ "$status" = "succeeded" ] && [ "$before" = "$after" ]; then
   echo "PASS: the worker reconnected by itself and processed the job"

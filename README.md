@@ -184,3 +184,14 @@ Measurements on a single-node Kind cluster (small samples, not guarantees):
 | 12 jobs of 3 s, 3 workers | 12.6 s (4 jobs per worker) |
 | API under load (about 2,400 requests/s for 150 s) | 2 to 4 replicas within about 30 s, 0 failed out of 361,259 requests |
 | After the load stops | back to 2 replicas after about 2 minutes (60 s stabilization window) |
+
+## Releases
+
+A release is published from a `vMAJOR.MINOR.PATCH` tag on a commit of `main`. The
+`Release` workflow builds the API image, smoke-tests it, scans it with Trivy (it fails
+on CRITICAL vulnerabilities that have a fix), pushes it to GitHub Container Registry as
+`ghcr.io/eyazawem/cloudops-api:<version>` and `:sha-<short commit>`, then creates the
+GitHub release. There is no `latest` tag.
+
+    git tag -a v0.1.0 -m "v0.1.0"
+    git push origin v0.1.0

@@ -216,3 +216,13 @@ jobs:
           python3 scripts/trivy-summary.py "$RUNNER_TEMP/trivy/fs.json"
           echo "===== image ====="
           python3 scripts/trivy-summary.py "$RUNNER_TEMP/trivy/image.json"
+          {
+            echo "### Trivy: dependencies (services/api)"
+            echo '```'
+            python3 scripts/trivy-summary.py "$RUNNER_TEMP/trivy/fs.json"
+            echo '```'
+            echo "### Trivy: image"
+            echo '```'
+            python3 scripts/trivy-summary.py "$RUNNER_TEMP/trivy/image.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
